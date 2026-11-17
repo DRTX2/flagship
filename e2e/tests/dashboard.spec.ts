@@ -22,6 +22,8 @@ test('creates a flag, targets a rule, rolls out 30% and records history', async 
   page.on('pageerror', (e) => errors.push(e.message));
   await signIn(page);
   await expect(page.getByRole('heading', { name: /Feature flags/ })).toBeVisible();
+  // The stylesheet must load under the strict CSP (regression: critical-CSS inlining left the app unstyled).
+  await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(11, 13, 16)');
 
   await page.getByRole('button', { name: 'New flag' }).click();
   await page.locator('input[name=key]').fill('pricing-page-v2');

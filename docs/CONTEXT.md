@@ -27,6 +27,7 @@ Feature flags with local evaluation: a pure engine (`packages/core`) shared by a
 - **Nest 12 is ESM-only** → `.js` import suffixes, TypeScript pinned `~5.9` in the API (decorator metadata). The dashboard uses Angular's own TypeScript.
 - **`res.sendFile` needs absolute paths**: deep links broke when `DASHBOARD_DIR` was relative. Fixed with `resolve()`, and the Playwright conflict test is what found it.
 - **Playwright starts `webServer` before `globalSetup`**, so the E2E database is created in `e2e/start-server.mjs`.
+- **CSP vs Angular critical CSS**: `inlineCritical` adds an inline `onload` to the stylesheet link, which `script-src 'self'` blocks → unstyled app. It's disabled in `angular.json` and an E2E assertion checks the page background.
 - **CSP**: `script-src 'self'` works with the Angular 22 build. Styles need `'unsafe-inline'` (runtime component styles).
 - **TS DOM types**: `TextDecoderStream` doesn't type-check with `pipeThrough`, so the SDK uses `TextDecoder` with `stream: true` and normalizes CRLF on the whole buffer.
 - **Docker**: the API's devDependency on `@flagship/sdk` requires copying `packages/sdk/package.json` in the Dockerfile for workspace resolution (not shipped in the image).
