@@ -25,9 +25,11 @@ Legend: ✅ done and verified · 🟡 partial · ⬜ not started.
 |---|---|
 | JSON logs + request ids, Prometheus metrics (streams, changes, latency) | ✅ |
 | Helmet with strict CSP, body size cap | ✅ (E2E asserts no page errors under CSP) |
-| Black-box integration suite (2 replicas + real SDK) | ✅ 7 tests |
-| Playwright E2E suite in repo | ✅ 4 flows (also caught a real deep-link bug) |
+| Black-box integration suite (2 replicas + real SDK) | ✅ 9 tests |
+| Playwright E2E suite in repo | ✅ 5 flows (also caught a real deep-link bug) |
 | Fan-out load test (2,000 streams) | ✅ |
+| Rollback from audit history (API + UI) | ✅ integration + Playwright |
+| Optional Hookrelay integration (`flag.*` events, idempotent) | ✅ integration (stand-in server) |
 | Hardened runtime image (no npm/corepack, patched OS) | ✅ Trivy image clean |
 
 ## Phase 4: Pipeline & cloud 🟡

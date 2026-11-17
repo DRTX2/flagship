@@ -1,9 +1,9 @@
 # Test plan
 
 ```
-         ┌──────────┐  Playwright (4): real API + built Angular app in Chromium
+         ┌──────────┐  Playwright (5): real API + built Angular app in Chromium
          │   E2E    │
-       ┌─┴──────────┴─┐  Integration (7): 2 API replicas from dist/, real SDK, Postgres
+       ┌─┴──────────┴─┐  Integration (9): 2 API replicas from dist/, real SDK, Postgres, stand-in Hookrelay
        │ integration  │
      ┌─┴──────────────┴─┐  Unit: engine (64) + SDK against a real SSE server (9)
      │       unit       │
@@ -38,10 +38,12 @@ Ruleset load + local evaluation · patches applied by version, stale patch ignor
 | I4 | Stale version → 409. Rollout not summing to 100% → 400 with a clear message |
 | I5 | Explain = RULE_MATCH. Audit lists actor and actions in order |
 | I6 | Archive → connected SDK drops the flag, fallback served |
-| I7 | Metrics: open streams per env, committed changes by action |
+| I7 | **Rollback** to the state before an audit entry: SDK patched, audit says `rolled back to #id`, unknown entry → 404 |
+| I8 | **Hookrelay publishing**: `flag.created`/`flag.updated` with bearer auth and `flagship:<type>:<flag>:<env>:<version>` idempotency key |
+| I9 | Metrics: open streams per env, committed changes by action |
 
 ### E2E (Playwright)
-Wrong token rejected · create flag → rule + 70/30 rollout → save → history → explain (and no page errors under CSP) · conflict when a teammate saved first · SDK key shown exactly once.
+Wrong token rejected · create flag → rule + 70/30 rollout → save → history → explain (and no page errors under CSP) · conflict when a teammate saved first · restore a previous state from the history · SDK key shown exactly once.
 
 ## Gaps
 | ID | Gap | Plan |

@@ -9,7 +9,7 @@ Feature flags with local evaluation: a pure engine (`packages/core`) shared by a
 | Area | State |
 |---|---|
 | Features | v1 complete (IMPLEMENTATION_PLAN phases 1–3) |
-| Tests | engine 64 (100% lines), SDK 9 (100%), integration 7 (2 replicas), Playwright 4, all green |
+| Tests | engine 64 (100% lines), SDK 9 (100%), integration 9 (2 replicas + stand-in Hookrelay), Playwright 5, all green |
 | Scans | Trivy fs + image clean (3 accepted risks), actionlint clean, ESLint clean |
 | Load | 2,000 streams/replica, change to all in ≤62 ms |
 | CI/CD | written, not yet run on GitHub |
@@ -21,6 +21,7 @@ Feature flags with local evaluation: a pure engine (`packages/core`) shared by a
 3. MurmurHash3 + per-flag salt + ordered weights ([0003](adr/0003-murmur3-bucketing.md)). Never reorder rollout entries or change salts implicitly.
 4. Optimistic concurrency ([0004](adr/0004-optimistic-concurrency.md)).
 5. One service serves the dashboard ([0005](adr/0005-single-service-ecs.md)).
+6. Hookrelay publishing is optional and after-commit ([0006](adr/0006-optional-hookrelay-integration.md)). Never make SDK propagation depend on it.
 
 ## Gotchas already hit
 - **Nest 12 is ESM-only** → `.js` import suffixes, TypeScript pinned `~5.9` in the API (decorator metadata). The dashboard uses Angular's own TypeScript.
@@ -31,6 +32,7 @@ Feature flags with local evaluation: a pure engine (`packages/core`) shared by a
 - **Docker**: the API's devDependency on `@flagship/sdk` requires copying `packages/sdk/package.json` in the Dockerfile for workspace resolution (not shipped in the image).
 - **Base image CVEs** live in the bundled npm. The runtime stage removes npm/corepack/yarn.
 - **Connection budget**: (10 pool + 1 LISTEN) × replicas must stay under RDS `max_connections`.
+- **bigserial ids come back as strings** from node-pg (audit ids), so the rollback body uses `z.coerce.number()`.
 
 ## Where to look
 | Task | Files |
@@ -53,3 +55,4 @@ docker build -t flagship:local . && docker compose up -d
 
 ## Log
 - **2026-11-16**: v1 (engine, SDK, API, dashboard). Added metrics, JSON logs, CSP, integration suite on 2 replicas, Playwright E2E (found the deep-link bug), coverage gates, fan-out load test, hardened image, CI/CodeQL/deploy, Terraform, docs. Next: ROADMAP "Now".
+- **2026-11-16 (later)**: rollback from history (API + Restore button), optional Hookrelay integration (`flag.*` events, ADR-0006), docs/ECOSYSTEM.md.

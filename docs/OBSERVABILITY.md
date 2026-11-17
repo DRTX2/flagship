@@ -19,6 +19,7 @@ JSON (`ConsoleLogger`) when `NODE_ENV=production`/`LOG_FORMAT=json`. One line pe
 | `flagship_sdk_stream_connections` | gauge | `env` (per replica) |
 | `flagship_stream_events_total` | counter | `type` = put/patch/delete |
 | `flagship_config_changes_total` | counter | `env`, `action` (turned on/off, updated targeting) |
+| `flagship_hookrelay_notifications_total` | counter | `result` = sent/rejected/error (optional integration) |
 | `flagship_http_request_duration_seconds` | histogram | `method`, `route`, `status` |
 | `flagship_process_*`, `flagship_nodejs_*` | default | CPU, memory, event loop lag |
 

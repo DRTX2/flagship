@@ -14,10 +14,11 @@ import { AdminController } from './admin.controller.js';
 import { SdkController } from './sdk.controller.js';
 import { FlagsService } from './flags.service.js';
 import { AdminGuard, SdkGuard } from './http.js';
+import { HookrelayNotifier } from './hookrelay-notifier.js';
 
 @Module({
   controllers: [AdminController, SdkController],
-  providers: [{ provide: PG, useFactory: createPool }, FlagsService, AdminGuard, SdkGuard],
+  providers: [{ provide: PG, useFactory: createPool }, FlagsService, HookrelayNotifier, AdminGuard, SdkGuard],
 })
 class AppModule {}
 

@@ -9,6 +9,7 @@ import pg from 'pg';
 import { filter, Subject } from 'rxjs';
 import { PG, required, tx, type Db } from './db/db.js';
 import { metrics } from './common/metrics.js';
+import { HookrelayNotifier } from './hookrelay-notifier.js';
 
 export interface ConfigInput {
   enabled: boolean;
@@ -32,7 +33,7 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
   private listener?: pg.Client;
   private stopped = false;
 
-  constructor(@Inject(PG) private readonly db: Db) {}
+  constructor(@Inject(PG) private readonly db: Db, private readonly hookrelay: HookrelayNotifier) {}
 
   /** Full ruleset for one environment: what SDKs download and keep in memory. */
   async rulesetForEnv(envId: string): Promise<Record<string, FlagConfig>> {
@@ -68,6 +69,9 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
       const envs = await c.query('SELECT key FROM environments');
       for (const e of envs.rows) await this.notify(c, e.key, input.key);
       return { key: input.key };
+    }).then((r) => {
+      this.hookrelay.notify({ type: 'flag.created', flagKey: input.key, action: 'created', actor });
+      return r;
     });
   }
 
@@ -75,7 +79,7 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
    * Optimistic concurrency: two people editing the same flag cannot silently overwrite
    * each other. pg_notify inside the transaction is only delivered if it commits.
    */
-  async updateConfig(flagKey: string, envKey: string, input: ConfigInput, actor: string) {
+  async updateConfig(flagKey: string, envKey: string, input: ConfigInput, actor: string, actionOverride?: string) {
     return tx(this.db, async (c) => {
       const { rows } = await c.query(
         `SELECT c.flag_id, c.env_id, f.variations, c.enabled, c.off_variation AS "offVariation", c.fallthrough, c.rules, c.version
@@ -98,7 +102,7 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
         [cur.flag_id, cur.env_id, next.enabled, next.offVariation, JSON.stringify(next.fallthrough), JSON.stringify(next.rules)],
       );
       const before = { enabled: cur.enabled, offVariation: cur.offVariation, fallthrough: cur.fallthrough, rules: cur.rules };
-      const action = before.enabled !== next.enabled ? (next.enabled ? 'turned on' : 'turned off') : 'updated targeting';
+      const action = actionOverride ?? (before.enabled !== next.enabled ? (next.enabled ? 'turned on' : 'turned off') : 'updated targeting');
       await c.query(
         `INSERT INTO audit_log (flag_key, env_key, actor, action, before, after) VALUES ($1,$2,$3,$4,$5,$6)`,
         [flagKey, envKey, actor, action, before, next],
@@ -106,9 +110,26 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
       await this.notify(c, envKey, flagKey);
       return { version: input.version + 1, action };
     }).then((r) => {
-      metrics.configChanges.inc({ env: envKey, action: r.action });
+      metrics.configChanges.inc({ env: envKey, action: actionOverride ? 'rolled back' : r.action });
+      this.hookrelay.notify({ type: 'flag.updated', flagKey, env: envKey, version: r.version, action: r.action, actor });
       return { version: r.version };
     });
+  }
+
+  /**
+   * Restore the configuration that existed before a given audit entry. Goes through updateConfig,
+   * so it is validated, versioned, audited ("rolled back to #id") and pushed to SDKs like any edit.
+   */
+  async rollback(flagKey: string, envKey: string, auditId: number, actor: string) {
+    const { rows } = await this.db.query(
+      `SELECT a.before, c.version FROM audit_log a
+         JOIN flags f ON f.key = a.flag_key JOIN environments e ON e.key = a.env_key
+         JOIN flag_configs c ON c.flag_id = f.id AND c.env_id = e.id
+        WHERE a.id=$1 AND a.flag_key=$2 AND a.env_key=$3 AND a.before IS NOT NULL AND f.archived_at IS NULL`,
+      [auditId, flagKey, envKey],
+    );
+    if (!rows[0]) throw new NotFoundException('No restorable audit entry for this flag and environment');
+    return this.updateConfig(flagKey, envKey, { ...rows[0].before, version: rows[0].version }, actor, `rolled back to #${auditId}`);
   }
 
   async archive(flagKey: string, actor: string) {
@@ -119,6 +140,7 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
       const envs = await c.query('SELECT key FROM environments');
       for (const e of envs.rows) await this.notify(c, e.key, flagKey);
     });
+    this.hookrelay.notify({ type: 'flag.archived', flagKey, action: 'archived', actor });
   }
 
   changesFor(envKey: string) {

@@ -129,3 +129,4 @@ a.flag-row:hover { background: #fafaf8; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 @media (max-width: 640px) { .topbar { flex-wrap: wrap; } .who { display: none; } .rollout { padding-left: 0; } }
+.audit .restore { margin-left: 0.25rem; padding: 0.1rem 0.5rem; }

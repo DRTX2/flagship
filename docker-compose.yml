@@ -9,6 +9,10 @@ services:
     environment:
       DATABASE_URL: postgres://flagship:flagship@postgres:5432/flagship
       ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+      # Optional ecosystem integration (docs/ECOSYSTEM.md); empty = off
+      HOOKRELAY_URL: ${HOOKRELAY_URL:-}
+      HOOKRELAY_API_KEY: ${HOOKRELAY_API_KEY:-}
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports: ["4000:4000"]
     depends_on: { postgres: { condition: service_healthy } }
     deploy: { replicas: 1 }

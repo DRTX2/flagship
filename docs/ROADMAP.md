@@ -28,7 +28,7 @@ Effort: S < 1 day · M 1–3 days · L > 3 days.
 | 13 | Flag prerequisites (B only if A is on) and mutually exclusive groups | M |
 | 14 | Segments: reusable named audiences across flags | M |
 | 15 | Stale flag detection (no evaluations for N days) via SDK usage pings | M |
-| 16 | Webhooks on flag changes (could be delivered by Hookrelay) | S |
+| 16 | ~~Webhooks on flag changes via Hookrelay~~ **done** (ADR-0006). Next: transactional outbox if notifications become critical | S |
 | 17 | Dashboard on S3 + CloudFront with independent releases | S |
 
 ## Out of scope

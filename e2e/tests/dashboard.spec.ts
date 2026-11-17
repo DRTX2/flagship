@@ -71,6 +71,16 @@ test('surfaces a conflict when someone else saved first', async ({ page, request
   await expect(page.locator('.savebar .error')).toContainText('changed by someone else');
 });
 
+test('restores a previous configuration from the history', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/flags/pricing-page-v2');
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+  page.once('dialog', (d) => d.accept());
+  await page.locator('.audit li', { hasText: 'turned on' }).last().getByRole('button', { name: 'Restore' }).click();
+  await expect(page.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+  await expect(page.locator('.audit li').first()).toContainText('E2E Bot rolled back to #');
+});
+
 test('generates an SDK key that is shown exactly once', async ({ page }) => {
   await signIn(page);
   await page.getByRole('link', { name: 'Environments' }).click();

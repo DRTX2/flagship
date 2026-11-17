@@ -156,7 +156,11 @@ const clone = <T,>(v: T): T => structuredClone(v);
           <ol class="audit">
             @for (a of audit.value() ?? []; track a.id) {
               <li><b>{{ a.actor }}</b> {{ a.action }} @if (a.env) { in <span class="env-badge small" [class.prod]="a.env === 'production'">{{ a.env }}</span> }
-                <span class="muted small">{{ a.createdAt | date: 'MMM d, HH:mm:ss' }}</span></li>
+                <span class="muted small">{{ a.createdAt | date: 'MMM d, HH:mm:ss' }}</span>
+                @if (a.before && a.env === env.key()) {
+                  <button class="btn ghost small restore" (click)="restore(f.key, a)" title="Restore the configuration from before this change">Restore</button>
+                }
+              </li>
             } @empty { <li class="muted">No changes yet.</li> }
           </ol>
         </section>
@@ -286,6 +290,17 @@ export class FlagDetailPage {
       this.evaluation.set(await this.api.explain(key, this.env.key(), JSON.parse(raw)));
     } catch (e) {
       this.explainError.set(e instanceof SyntaxError ? 'Context must be valid JSON' : errorMessage(e));
+    }
+  }
+
+  async restore(key: string, entry: AuditEntry) {
+    if (!confirm(`Restore ${key} in ${this.env.key()} to how it was before "${entry.action}" by ${entry.actor}?`)) return;
+    try {
+      await this.api.rollback(key, this.env.key(), entry.id);
+      this.flag.reload();
+      this.audit.reload();
+    } catch (e) {
+      this.saveError.set(errorMessage(e));
     }
   }
 

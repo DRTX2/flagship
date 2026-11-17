@@ -16,6 +16,10 @@ export const metrics = {
     name: 'flagship_stream_events_total', help: 'Events pushed to SDK streams, by type (put/patch/delete)',
     labelNames: ['type'] as const, registers: [registry],
   }),
+  hookrelayNotifications: new Counter({
+    name: 'flagship_hookrelay_notifications_total', help: 'Flag change events published to Hookrelay',
+    labelNames: ['result'] as const, registers: [registry],
+  }),
   httpRequests: new Histogram({
     name: 'flagship_http_request_duration_seconds', help: 'API request latency',
     labelNames: ['method', 'route', 'status'] as const, buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5], registers: [registry],

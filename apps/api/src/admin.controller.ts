@@ -109,6 +109,14 @@ export class AdminController {
     return this.flags.updateConfig(flagKey, env, body, actor);
   }
 
+  @Post('flags/:key/envs/:env/rollback')
+  rollback(
+    @Param('key') flagKey: string, @Param('env') env: string, @Actor() actor: string,
+    @Body(new Zod(z.object({ auditId: z.coerce.number().int().positive() }))) body: { auditId: number }, // bigserial ids arrive as strings
+  ) {
+    return this.flags.rollback(flagKey, env, body.auditId, actor);
+  }
+
   @Delete('flags/:key')
   @HttpCode(204)
   archive(@Param('key') flagKey: string, @Actor() actor: string) {

@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | **Stack** | TypeScript end to end · NestJS 12 · Angular 22 (zoneless, signals) · PostgreSQL 17 · a pure evaluation engine + server SDK |
-| **Quality** | Vitest (64 engine + 9 SDK tests, coverage gates) · black-box integration over 2 replicas · Playwright E2E · ESLint · SonarQube · CodeQL · Trivy · gitleaks |
+| **Quality** | Vitest (64 engine + 9 SDK tests, coverage gates) · black-box integration over 2 replicas (9) · Playwright E2E (5) · ESLint · SonarQube · CodeQL · Trivy · gitleaks |
 | **Ops** | Prometheus metrics · JSON logs · OpenTelemetry-ready · Docker · GitHub Actions (OIDC) · Terraform · AWS ECS Fargate + RDS |
 
 ## Why it's built this way
@@ -46,7 +46,8 @@ Details and method in [SCALABILITY](docs/SCALABILITY.md).
 | **Postgres only** | Cross-replica fan-out via `LISTEN/NOTIFY`. `pg_notify` inside the write transaction is delivered **only if it commits**. A dropped LISTEN connection triggers a full resync |
 | **Safe concurrent editing** | Every config is versioned. A stale save gets `409`, so nobody silently overwrites a teammate's kill switch |
 | **Resilient SDK** | Streams over `fetch` (works where `EventSource` can't send auth headers), jittered reconnect, rejects out-of-order patches, offline bootstrap, never returns the wrong type |
-| **Audit trail & keys** | Who/what/where with before/after config. Per-environment SDK keys stored hashed, shown once, rotated instantly |
+| **Audit trail, rollback & keys** | Who/what/where with before/after config, one-click restore of any previous state (goes through the normal versioned write path). Per-environment SDK keys stored hashed, shown once, rotated instantly |
+| **Ecosystem** | Optionally publishes `flag.*` events to [Hookrelay](https://github.com/DRTX2/hookrelay) (idempotent, after commit, never a dependency). See [ECOSYSTEM](docs/ECOSYSTEM.md) |
 
 ![editor](docs/detail.png)
 
@@ -79,8 +80,8 @@ cd examples && FLAGSHIP_URL=http://localhost:4000 SDK_KEY=fs_sdk_... ADMIN_TOKEN
 ```bash
 pnpm --filter @flagship/core test:cov   # 64 tests · 100% lines / 98% branches
 pnpm --filter @flagship/sdk test:cov    # 9 tests against a real SSE server · 100% / 96%
-pnpm --filter api test:int              # 7 black-box tests: 2 API replicas + real SDK + Postgres
-pnpm --filter e2e test                  # 4 Playwright flows on the Angular dashboard
+pnpm --filter api test:int              # 9 black-box tests: 2 API replicas + real SDK + Postgres + stand-in Hookrelay
+pnpm --filter e2e test                  # 5 Playwright flows on the Angular dashboard
 ```
 
 ## Documentation
@@ -95,6 +96,7 @@ pnpm --filter e2e test                  # 4 Playwright flows on the Angular dash
 | [OBSERVABILITY](docs/OBSERVABILITY.md) · [RUNBOOK](docs/RUNBOOK.md) | Signals, SLOs, alerts, what to do |
 | [SECURITY](docs/SECURITY.md) | Threat model, OWASP mapping, accepted risks |
 | [SCALABILITY](docs/SCALABILITY.md) | Measurements and limits |
+| [ECOSYSTEM](docs/ECOSYSTEM.md) | How Flagship and Hookrelay integrate while staying independent |
 | [CONTEXT](docs/CONTEXT.md) · [AGENTS.md](AGENTS.md) | Project memory and conventions for continuing work |
 
 ## Layout

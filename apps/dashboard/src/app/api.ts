@@ -71,6 +71,9 @@ export class Api {
   explain(key: string, env: string, context: Record<string, unknown>) {
     return firstValueFrom(this.http.post<Evaluation>(`/api/flags/${key}/envs/${env}/explain`, { context }));
   }
+  rollback(key: string, env: string, auditId: number) {
+    return firstValueFrom(this.http.post<{ version: number }>(`/api/flags/${key}/envs/${env}/rollback`, { auditId }));
+  }
   rotateKey(env: string) {
     return firstValueFrom(this.http.post<{ sdkKey: string }>(`/api/environments/${env}/sdk-key`, {}));
   }

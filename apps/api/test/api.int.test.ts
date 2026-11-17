@@ -1,4 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -13,6 +15,9 @@ const B = 'http://127.0.0.1:4902'; // replica B (SDK stream)
 const procs: ChildProcess[] = [];
 const clients: FlagshipClient[] = [];
 let sdkKey = '';
+// Fake Hookrelay: replica A publishes flag changes here (optional ecosystem integration).
+let hookrelay: Server;
+const hookrelayCalls: { auth?: string; idem?: string; body: { eventType: string; payload: Record<string, unknown> } }[] = [];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const admin = async (method: string, path: string, body?: unknown, base = A) => {
@@ -34,10 +39,21 @@ beforeAll(async () => {
   await root.query(`CREATE DATABASE ${db}`);
   await root.end();
 
+  hookrelay = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      hookrelayCalls.push({ auth: req.headers.authorization, idem: req.headers['idempotency-key'] as string, body: JSON.parse(body) });
+      res.writeHead(202).end('{}');
+    });
+  });
+  await new Promise<void>((r) => hookrelay.listen(0, '127.0.0.1', r));
+  const hookrelayUrl = `http://127.0.0.1:${(hookrelay.address() as AddressInfo).port}`;
+
   const dist = join(import.meta.dirname, '../dist/main.js');
   for (const base of [A, B]) {
     // replicas start one after the other so only one runs the migrations (advisory lock makes either order safe)
-    const p = spawn(process.execPath, [dist], { env: { ...process.env, DATABASE_URL, ADMIN_TOKEN: ADMIN, PORT: new URL(base).port, LOG_FORMAT: 'json' }, stdio: ['ignore', 'ignore', 'inherit'] });
+    const p = spawn(process.execPath, [dist], { env: { ...process.env, DATABASE_URL, ADMIN_TOKEN: ADMIN, PORT: new URL(base).port, LOG_FORMAT: 'json', ...(base === A ? { HOOKRELAY_URL: hookrelayUrl, HOOKRELAY_API_KEY: 'hr_test' } : {}) }, stdio: ['ignore', 'ignore', 'inherit'] });
     procs.push(p);
     for (let i = 0; i < 100; i++) {
       if (await fetch(`${base}/health`).then((r) => r.ok).catch(() => false)) break;
@@ -49,6 +65,7 @@ beforeAll(async () => {
 afterAll(() => {
   clients.forEach((c) => c.close());
   procs.forEach((p) => p.kill('SIGTERM'));
+  hookrelay?.close();
 });
 
 describe('Flagship (black box, two replicas)', () => {
@@ -104,6 +121,29 @@ describe('Flagship (black box, two replicas)', () => {
     const audit = await admin('GET', '/api/flags/new-checkout/audit');
     expect(audit.body.map((a: { action: string }) => a.action)).toEqual(['turned on', 'created']);
     expect(audit.body[0].actor).toBe('integration-test');
+  });
+
+  it('rolls back to the configuration before an audit entry, through the normal write path', async () => {
+    const client = clients[0];
+    const audit = await admin('GET', '/api/flags/new-checkout/audit');
+    const turnedOn = audit.body.find((a: { action: string }) => a.action === 'turned on');
+    const changed = new Promise<void>((resolve) => client.onChange((k) => k === 'new-checkout' && resolve()));
+    const r = await admin('POST', '/api/flags/new-checkout/envs/production/rollback', { auditId: turnedOn.id });
+    expect(r.status).toBe(201);
+    await changed;
+    expect(client.variation('new-checkout', { key: 'u1', country: 'EC' }, true)).toBe(false); // back to off
+    const after = await admin('GET', '/api/flags/new-checkout/audit');
+    expect(after.body[0]).toMatchObject({ action: `rolled back to #${turnedOn.id}`, actor: 'integration-test' });
+    expect((await admin('POST', '/api/flags/new-checkout/envs/production/rollback', { auditId: 999999 })).status).toBe(404);
+  });
+
+  it('publishes flag changes to Hookrelay with auth and an idempotency key (optional integration)', async () => {
+    for (let i = 0; i < 20 && !hookrelayCalls.some((c) => c.body.eventType === 'flag.updated'); i++) await sleep(100);
+    const created = hookrelayCalls.find((c) => c.body.eventType === 'flag.created');
+    const updated = hookrelayCalls.find((c) => c.body.eventType === 'flag.updated' && c.body.payload.action === 'turned on');
+    expect(created?.auth).toBe('Bearer hr_test');
+    expect(updated?.idem).toBe('flagship:flag.updated:new-checkout:production:2');
+    expect(updated?.body.payload).toMatchObject({ flagKey: 'new-checkout', env: 'production', version: 2, actor: 'integration-test' });
   });
 
   it('removes archived flags from connected SDKs', async () => {
