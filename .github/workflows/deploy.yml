@@ -1,0 +1,55 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # GitHub OIDC -> AWS: no long-lived keys
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  image:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_ECR_ROLE_ARN }}', aws-region: '${{ env.AWS_REGION }}' }
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - run: |
+          image="${{ steps.ecr.outputs.registry }}/flagship:${{ steps.tag.outputs.tag }}"
+          docker build -t "$image" .
+          docker push "$image"
+
+  production:
+    needs: image
+    runs-on: ubuntu-latest
+    environment: production
+    defaults: { run: { working-directory: infra/terraform } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: 1.13.x }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: '${{ env.AWS_REGION }}' }
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform plan -input=false -var-file=envs/production.tfvars -var image_tag=${{ needs.image.outputs.tag }} -out=tfplan
+      - run: terraform apply -input=false tfplan
+      - run: aws ecs wait services-stable --cluster flagship-production --services flagship-production
+      - run: curl -fsS "$(terraform output -raw url)/health"

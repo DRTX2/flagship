@@ -1,0 +1,11 @@
+# Accepted risks. Each entry needs a reason; review in docs/SECURITY.md when the context changes.
+
+# Public ALB: dashboard + SDK endpoints are the product's entry point (SDKs run in customer infra).
+AVD-AWS-0053
+
+# HTTP listener: redirects to HTTPS whenever certificate_arn is set; plain HTTP only in demo environments.
+AVD-AWS-0054
+
+# App egress is limited to TCP 443 (ECR, Secrets Manager, CloudWatch through the NAT gateway), not all
+# ports. Plan (ROADMAP): VPC interface endpoints for those services, then restrict egress to the VPC CIDR.
+AVD-AWS-0104

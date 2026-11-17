@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @flagship/core build && pnpm --filter @flagship/sdk build
+      - run: pnpm --filter api lint
+      - run: pnpm --filter api typecheck
+      - name: Unit tests with coverage gates (engine + SDK)
+        run: pnpm --filter @flagship/core test:cov && pnpm --filter @flagship/sdk test:cov
+      - run: pnpm --filter api build && pnpm --filter dashboard build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            packages/core/coverage/lcov.info
+            packages/sdk/coverage/lcov.info
+
+  integration:
+    name: Integration (2 API replicas + real SDK + Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: flagship, POSTGRES_PASSWORD: flagship, POSTGRES_DB: flagship }
+        ports: ['5433:5432']
+        options: --health-cmd "pg_isready -U flagship" --health-interval 2s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @flagship/core build && pnpm --filter @flagship/sdk build
+      - run: pnpm --filter api test:int
+
+  e2e:
+    name: E2E (Playwright, Angular dashboard)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: flagship, POSTGRES_PASSWORD: flagship, POSTGRES_DB: flagship }
+        ports: ['5433:5432']
+        options: --health-cmd "pg_isready -U flagship" --health-interval 2s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @flagship/core build && pnpm --filter api build && pnpm --filter dashboard build
+      - run: pnpm --filter e2e exec playwright install --with-deps chromium
+      - run: pnpm --filter e2e test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-report, path: e2e/playwright-report }
+
+  sonar:
+    name: SonarQube analysis
+    needs: quality
+    runs-on: ubuntu-latest
+    if: ${{ vars.SONAR_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/download-artifact@v4
+        with: { name: coverage, path: packages }
+      - uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+      - uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env: { SONAR_TOKEN: '${{ secrets.SONAR_TOKEN }}' }
+
+  security:
+    name: Secrets, dependencies, image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+      - uses: aquasecurity/trivy-action@0.33.1
+        with: { scan-type: fs, scanners: 'vuln,secret,misconfig', severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1' }
+      - run: docker build -t flagship:ci .
+      - uses: aquasecurity/trivy-action@0.33.1
+        with: { image-ref: 'flagship:ci', severity: 'HIGH,CRITICAL', ignore-unfixed: true, exit-code: '1' }
+
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: infra/terraform } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: 1.13.x }
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate

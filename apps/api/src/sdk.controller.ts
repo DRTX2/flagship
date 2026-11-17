@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Controller, Get, Headers, Res, Sse, UseGuards, type MessageEvent } from '@nestjs/common';
 import type { Response } from 'express';
-import { concat, defer, from, interval, map, merge, mergeMap, type Observable } from 'rxjs';
+import { concat, defer, finalize, from, interval, map, merge, mergeMap, type Observable, tap } from 'rxjs';
+import { metrics } from './common/metrics.js';
 import { Env, SdkGuard } from './http.js';
 import { FlagsService } from './flags.service.js';
 
@@ -42,6 +43,13 @@ export class SdkController {
       }),
     );
     const heartbeat = interval(25_000).pipe(map(() => ({ type: 'ping', data: '' }) as MessageEvent));
-    return concat(put(), merge(changes, heartbeat));
+    // Count on subscribe/unsubscribe so the gauge matches real open streams.
+    return defer(() => {
+      metrics.sseConnections.inc({ env: env.key });
+      return concat(put(), merge(changes, heartbeat));
+    }).pipe(
+      tap((e) => e.type !== 'ping' && metrics.pushes.inc({ type: String(e.type) })),
+      finalize(() => metrics.sseConnections.dec({ env: env.key })),
+    );
   }
 }

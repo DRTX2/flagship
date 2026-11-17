@@ -8,6 +8,7 @@ import { validateFlag } from '@flagship/core';
 import pg from 'pg';
 import { filter, Subject } from 'rxjs';
 import { PG, required, tx, type Db } from './db/db.js';
+import { metrics } from './common/metrics.js';
 
 export interface ConfigInput {
   enabled: boolean;
@@ -103,7 +104,10 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
         [flagKey, envKey, actor, action, before, next],
       );
       await this.notify(c, envKey, flagKey);
-      return { version: input.version + 1 };
+      return { version: input.version + 1, action };
+    }).then((r) => {
+      metrics.configChanges.inc({ env: envKey, action: r.action });
+      return { version: r.version };
     });
   }
 

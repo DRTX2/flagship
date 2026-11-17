@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bucket, evaluate, murmur3, validateFlag, type FlagConfig } from '../src/index.js';
+import { bucket, evaluate, matchClause, murmur3, validateFlag, type Clause, type FlagConfig, type Value } from '../src/index.js';
 
 const base: FlagConfig = {
   key: 'new-checkout', variations: [false, true], enabled: true, offVariation: 0,
@@ -116,5 +116,59 @@ describe('validateFlag', () => {
       'fallthrough: rollout weights must sum to 100% (got 50%)',
       'rule 1: needs at least one condition',
     ]));
+  });
+});
+
+describe('operators', () => {
+  const one = (op: Clause['op'], actual: unknown, values: (string | number)[], negate = false) =>
+    matchClause({ attribute: 'a', op, values, negate }, { key: 'k', a: actual });
+  it.each([
+    ['in', 'EC', ['EC', 'CO'], true], ['in', 'PE', ['EC'], false], ['in', 42, ['42'], true], ['in', 42, [42], true],
+    ['contains', 'ana@acme.com', ['@acme'], true], ['contains', 123, ['1'], false],
+    ['startsWith', 'beta-user', ['beta'], true], ['startsWith', 'user-beta', ['beta'], false], ['startsWith', 5, ['5'], false],
+    ['endsWith', 'x@acme.com', ['.com'], true], ['endsWith', 'x@acme.io', ['.com'], false], ['endsWith', 5, ['5'], false],
+    ['lt', 9, [10], true], ['lt', 10, [10], false], ['lt', '9', [10], false],
+    ['lte', 10, [10], true], ['lte', 11, [10], false], ['lte', '10', [10], false],
+    ['gt', 11, [10], true], ['gt', 10, [10], false], ['gt', '11', [10], false],
+    ['gte', 10, [10], true], ['gte', 9, [10], false], ['gte', '10', [10], false],
+    ['semverGte', 'v2.4.0', ['2.4'], true], ['semverGte', '2.3.99', ['2.4.0'], false], ['semverGte', '3', ['2.10.0'], true],
+    ['semverLt', '2.3.9', ['2.4.0'], true], ['semverLt', '2.4.0', ['2.4.0'], false],
+    ['semverGte', 'latest', ['1.0.0'], false], ['semverLt', '1.0.0', ['not-a-version'], false],
+  ] as const)('%s(%j, %j) = %s', (op, actual, values, expected) => expect(one(op, actual, [...values])).toBe(expected));
+
+  it('negates', () => {
+    expect(one('in', 'EC', ['US'], true)).toBe(true);
+    expect(one('in', 'US', ['US'], true)).toBe(false);
+  });
+});
+
+describe('rollout edge cases', () => {
+  it('falls back to the last variation if an unvalidated rollout does not reach 100%', () => {
+    const f: FlagConfig = { ...base, fallthrough: { rollout: [{ variation: 1, weight: 1 }, { variation: 0, weight: 1 }] } };
+    const r = evaluate(f, { key: 'someone' }, false);
+    expect(r.bucket).toBeGreaterThanOrEqual(2);
+    expect(r.variationIndex).toBe(0);
+  });
+  it('buckets users with a missing bucketBy attribute together', () => {
+    const f: FlagConfig = { ...base, fallthrough: { rollout: [{ variation: 1, weight: 50_000 }, { variation: 0, weight: 50_000 }], bucketBy: 'orgId' } };
+    expect(evaluate(f, { key: 'a' }, false).bucket).toBe(evaluate(f, { key: 'b' }, false).bucket);
+  });
+});
+
+describe('validateFlag (every rule)', () => {
+  const ok = { variations: [false, true] as Value[], offVariation: 0, fallthrough: { variation: 1 } as FlagConfig['fallthrough'], rules: [] as FlagConfig['rules'] };
+  const rule = (over: Partial<FlagConfig['rules'][number]> = {}) => ({ id: 'r', clauses: [{ attribute: 'a', op: 'in' as const, values: ['x'] }], serve: { variation: 1 }, ...over });
+  it.each([
+    ['fewer than two variations', { variations: [true] }, 'at least two variations'],
+    ['rollout with no entries', { fallthrough: { rollout: [] } }, 'rollout is empty'],
+    ['negative weight', { fallthrough: { rollout: [{ variation: 0, weight: -1 }, { variation: 1, weight: 100_001 }] } }, 'non-negative integers'],
+    ['fractional weight', { fallthrough: { rollout: [{ variation: 0, weight: 0.5 }, { variation: 1, weight: 99_999.5 }] } }, 'non-negative integers'],
+    ['unknown variation in rule', { rules: [rule({ serve: { variation: 7 } })] }, 'rule 1: variation 7 does not exist'],
+    ['duplicate rule ids', { rules: [rule(), rule()] }, 'rule 2: duplicate id'],
+    ['unknown operator', { rules: [rule({ clauses: [{ attribute: 'a', op: 'regex' as never, values: ['x'] }] })] }, 'unknown operator regex'],
+    ['empty attribute', { rules: [rule({ clauses: [{ attribute: '', op: 'in', values: ['x'] }] })] }, 'attribute is required'],
+    ['no values', { rules: [rule({ clauses: [{ attribute: 'a', op: 'in', values: [] }] })] }, 'at least one value'],
+  ])('rejects %s', (_name, over, message) => {
+    expect(validateFlag({ ...ok, ...over } as Parameters<typeof validateFlag>[0]).join(' | ')).toContain(message);
   });
 });
