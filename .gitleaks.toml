@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation placeholders and the Sonar project key (not credentials)"
+regexes = ['''change-me''', '''DRTX2_flagship''', '''fs_sdk_\.\.\.''']
