@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment: { POSTGRES_USER: flagship, POSTGRES_PASSWORD: flagship, POSTGRES_DB: flagship }
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "flagship"], interval: 2s, retries: 20 }
+    volumes: [pgdata:/var/lib/postgresql/data]
+  flagship:
+    build: .
+    environment:
+      DATABASE_URL: postgres://flagship:flagship@postgres:5432/flagship
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+    ports: ["4000:4000"]
+    depends_on: { postgres: { condition: service_healthy } }
+    deploy: { replicas: 1 }
+volumes:
+  pgdata:

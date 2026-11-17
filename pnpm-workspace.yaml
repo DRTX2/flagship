@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+  - examples
+onlyBuiltDependencies:
+  - '@nestjs/core'
+  - esbuild
+  - lmdb
+  - msgpackr-extract

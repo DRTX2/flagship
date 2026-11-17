@@ -1,0 +1,1 @@
+{ "name": "examples", "private": true, "type": "module", "dependencies": { "@flagship/sdk": "workspace:*" } }
