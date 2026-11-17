@@ -1,4 +1,6 @@
-# Ecosystem: Flagship + Hookrelay
+# Ecosystem: Flagship + Hookrelay (+ Nimbus)
+
+> The three products run together as **Atalaya** ([DRTX2/atalaya](https://github.com/DRTX2/atalaya)): Nimbus detects a failing pipeline, calls `POST /automation/nimbus/flags/:key/envs/:env` here (HMAC-signed) to kill a flag, and restores it on recovery if no human changed it meanwhile. See that repo for the asserted end-to-end demo.
 
 Two **independent products** that solve different problems and can be used together:
 

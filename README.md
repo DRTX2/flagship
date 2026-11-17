@@ -47,6 +47,7 @@ Details and method in [SCALABILITY](docs/SCALABILITY.md).
 | **Safe concurrent editing** | Every config is versioned. A stale save gets `409`, so nobody silently overwrites a teammate's kill switch |
 | **Resilient SDK** | Streams over `fetch` (works where `EventSource` can't send auth headers), jittered reconnect, rejects out-of-order patches, offline bootstrap, never returns the wrong type |
 | **Audit trail, rollback & keys** | Who/what/where with before/after config, one-click restore of any previous state (goes through the normal versioned write path). Per-environment SDK keys stored hashed, shown once, rotated instantly |
+| **Atalaya** | Part of a 3-product platform ([DRTX2/atalaya](https://github.com/DRTX2/atalaya)): a Nimbus incident can kill a flag through a signed automation endpoint and restore it on recovery, never overriding a human change |
 | **Ecosystem** | Optionally publishes `flag.*` events to [Hookrelay](https://github.com/DRTX2/hookrelay) (idempotent, after commit, never a dependency). See [ECOSYSTEM](docs/ECOSYSTEM.md) |
 
 ![editor](docs/detail.png)

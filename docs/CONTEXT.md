@@ -55,4 +55,5 @@ docker build -t flagship:local . && docker compose up -d
 
 ## Log
 - **2026-11-16**: v1 (engine, SDK, API, dashboard). Added metrics, JSON logs, CSP, integration suite on 2 replicas, Playwright E2E (found the deep-link bug), coverage gates, fan-out load test, hardened image, CI/CodeQL/deploy, Terraform, docs. Next: ROADMAP "Now".
+- **2026-11-17**: Nimbus automation endpoint (signed kill/restore, humans win), 11 integration tests. Atalaya umbrella repo runs the 3 products together.
 - **2026-11-16 (later)**: rollback from history (API + Restore button), optional Hookrelay integration (`flag.*` events, ADR-0006), docs/ECOSYSTEM.md.
