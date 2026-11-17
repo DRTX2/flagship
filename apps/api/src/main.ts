@@ -15,9 +15,10 @@ import { SdkController } from './sdk.controller.js';
 import { FlagsService } from './flags.service.js';
 import { AdminGuard, SdkGuard } from './http.js';
 import { HookrelayNotifier } from './hookrelay-notifier.js';
+import { NimbusAutomationController } from './nimbus-automation.controller.js';
 
 @Module({
-  controllers: [AdminController, SdkController],
+  controllers: [AdminController, SdkController, NimbusAutomationController],
   providers: [{ provide: PG, useFactory: createPool }, FlagsService, HookrelayNotifier, AdminGuard, SdkGuard],
 })
 class AppModule {}
@@ -26,7 +27,8 @@ const pool = createPool();
 await migrate(pool);
 await pool.end();
 
-const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: createLogger() });
+// rawBody: webhook signatures (Nimbus) must be verified over the exact bytes received
+const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: createLogger(), rawBody: true });
 app.enableShutdownHooks();
 app.set('trust proxy', 1); // behind the ALB
 app.use(

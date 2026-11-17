@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -30,6 +31,17 @@ const admin = async (method: string, path: string, body?: unknown, base = A) => 
   return { status: res.status, body: text ? JSON.parse(text) : null };
 };
 const quiet = { warn: () => {} };
+const NIMBUS_SECRET = 'atalaya-shared-secret-for-tests';
+/** Signs exactly like Nimbus' HTTP connector: t=<unix>,v1=hex(HMAC-SHA256(secret, "<t>.<body>")). */
+const nimbusCall = async (flag: string, body: object, opts: { secret?: string; t?: number } = {}) => {
+  const raw = JSON.stringify(body);
+  const t = opts.t ?? Math.floor(Date.now() / 1000);
+  const sig = createHmac('sha256', opts.secret ?? NIMBUS_SECRET).update(`${t}.${raw}`).digest('hex');
+  const res = await fetch(`${A}/automation/nimbus/flags/${flag}/envs/production`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'nimbus-signature': `t=${t},v1=${sig}` }, body: raw,
+  });
+  return { status: res.status, body: await res.json() };
+};
 
 beforeAll(async () => {
   const root = new pg.Client({ connectionString: DATABASE_URL.replace(/\/[^/]+$/, '/postgres') });
@@ -53,7 +65,7 @@ beforeAll(async () => {
   const dist = join(import.meta.dirname, '../dist/main.js');
   for (const base of [A, B]) {
     // replicas start one after the other so only one runs the migrations (advisory lock makes either order safe)
-    const p = spawn(process.execPath, [dist], { env: { ...process.env, DATABASE_URL, ADMIN_TOKEN: ADMIN, PORT: new URL(base).port, LOG_FORMAT: 'json', ...(base === A ? { HOOKRELAY_URL: hookrelayUrl, HOOKRELAY_API_KEY: 'hr_test' } : {}) }, stdio: ['ignore', 'ignore', 'inherit'] });
+    const p = spawn(process.execPath, [dist], { env: { ...process.env, DATABASE_URL, ADMIN_TOKEN: ADMIN, PORT: new URL(base).port, LOG_FORMAT: 'json', ...(base === A ? { HOOKRELAY_URL: hookrelayUrl, HOOKRELAY_API_KEY: 'hr_test', NIMBUS_WEBHOOK_SECRET: NIMBUS_SECRET } : {}) }, stdio: ['ignore', 'ignore', 'inherit'] });
     procs.push(p);
     for (let i = 0; i < 100; i++) {
       if (await fetch(`${base}/health`).then((r) => r.ok).catch(() => false)) break;
@@ -146,6 +158,36 @@ describe('Flagship (black box, two replicas)', () => {
     expect(updated?.body.payload).toMatchObject({ flagKey: 'new-checkout', env: 'production', version: 2, actor: 'integration-test' });
   });
 
+  it('lets a signed Nimbus incident kill a flag and restore it on recovery (Atalaya integration)', async () => {
+    await admin('POST', '/api/flags', { key: 'orders-v2', name: 'Orders v2', kind: 'boolean', variations: [false, true] });
+    const f = await admin('GET', '/api/flags/orders-v2');
+    await admin('PUT', '/api/flags/orders-v2/envs/production', { enabled: true, offVariation: 0, fallthrough: { variation: 1 }, rules: [], version: f.body.envs.production.version });
+    const incident = { incidentId: 'inc-1', event: 'opened', source: 'nimbus', pipelineName: 'Orders', summary: 'Consumer stalled' };
+
+    expect((await nimbusCall('orders-v2', incident, { secret: 'wrong-secret-xxxxxxxx' })).status).toBe(401);
+    expect((await nimbusCall('orders-v2', incident, { t: Math.floor(Date.now() / 1000) - 600 })).status).toBe(401); // replay window
+
+    const killed = await nimbusCall('orders-v2', incident);
+    expect(killed.body).toMatchObject({ changed: true, action: 'killed' });
+    expect((await nimbusCall('orders-v2', incident)).body).toMatchObject({ changed: false, reason: 'already off' }); // at-least-once retry
+    const audit = await admin('GET', '/api/flags/orders-v2/audit');
+    expect(audit.body[0]).toMatchObject({ actor: 'nimbus (automation)', action: 'killed by nimbus incident inc-1: Consumer stalled' });
+
+    const restored = await nimbusCall('orders-v2', { ...incident, event: 'recovered' });
+    expect(restored.body).toMatchObject({ changed: true, action: 'restored' });
+    expect((await admin('GET', '/api/flags/orders-v2')).body.envs.production.enabled).toBe(true);
+    expect((await nimbusCall('orders-v2', { ...incident, event: 'recovered' })).body.changed).toBe(false);
+  });
+
+  it('never lets automation override a human change made during the incident', async () => {
+    await nimbusCall('orders-v2', { incidentId: 'inc-2', event: 'opened' });
+    const f = await admin('GET', '/api/flags/orders-v2');
+    // on-call engineer adjusts the flag manually while the incident is open
+    await admin('PUT', '/api/flags/orders-v2/envs/production', { ...f.body.envs.production, updatedAt: undefined, rules: [{ id: 'staff', clauses: [{ attribute: 'email', op: 'endsWith', values: ['@acme.com'] }], serve: { variation: 1 } }] });
+    const r = await nimbusCall('orders-v2', { incidentId: 'inc-2', event: 'recovered' });
+    expect(r.body).toMatchObject({ changed: false });
+  });
+
   it('removes archived flags from connected SDKs', async () => {
     const client = clients[0];
     const gone = new Promise<void>((resolve) => client.onChange((k) => k === 'new-checkout' && resolve()));
@@ -158,6 +200,6 @@ describe('Flagship (black box, two replicas)', () => {
     const text = await (await fetch(`${B}/metrics`)).text();
     expect(text).toMatch(/flagship_sdk_stream_connections\{env="production"\} 1/);
     const textA = await (await fetch(`${A}/metrics`)).text();
-    expect(textA).toMatch(/flagship_config_changes_total\{env="production",action="turned on"\} 1/);
+    expect(textA).toMatch(/flagship_config_changes_total\{env="production",action="turned on"\} [1-9]\d*/);
   });
 });
