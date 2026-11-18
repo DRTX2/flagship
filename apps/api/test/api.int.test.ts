@@ -2,6 +2,8 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -65,7 +67,10 @@ beforeAll(async () => {
   const dist = join(import.meta.dirname, '../dist/main.js');
   for (const base of [A, B]) {
     // replicas start one after the other so only one runs the migrations (advisory lock makes either order safe)
-    const p = spawn(process.execPath, [dist], { env: { ...process.env, DATABASE_URL, ADMIN_TOKEN: ADMIN, PORT: new URL(base).port, LOG_FORMAT: 'json', ...(base === A ? { HOOKRELAY_URL: hookrelayUrl, HOOKRELAY_API_KEY: 'hr_test', NIMBUS_WEBHOOK_SECRET: NIMBUS_SECRET } : {}) }, stdio: ['ignore', 'ignore', 'inherit'] });
+    // The key is read from a file (Docker/ECS secrets convention); the auth assertions below prove it.
+    const hookrelayKeyFile = join(tmpdir(), `flagship-hookrelay-key-${process.pid}`);
+    writeFileSync(hookrelayKeyFile, 'hr_test\n');
+    const p = spawn(process.execPath, [dist], { env: { ...process.env, DATABASE_URL, ADMIN_TOKEN: ADMIN, PORT: new URL(base).port, LOG_FORMAT: 'json', ...(base === A ? { HOOKRELAY_URL: hookrelayUrl, HOOKRELAY_API_KEY_FILE: hookrelayKeyFile, NIMBUS_WEBHOOK_SECRET: NIMBUS_SECRET } : {}) }, stdio: ['ignore', 'ignore', 'inherit'] });
     procs.push(p);
     for (let i = 0; i < 100; i++) {
       if (await fetch(`${base}/health`).then((r) => r.ok).catch(() => false)) break;

@@ -1,6 +1,6 @@
-# Ecosystem: Flagship + Hookrelay (+ Nimbus)
+# Ecosystem: Flagship + Hookrelay (+ Nimbus, Bitácora)
 
-> The three products run together as **Atalaya** ([DRTX2/atalaya](https://github.com/DRTX2/atalaya)): Nimbus detects a failing pipeline, calls `POST /automation/nimbus/flags/:key/envs/:env` here (HMAC-signed) to kill a flag, and restores it on recovery if no human changed it meanwhile. See that repo for the asserted end-to-end demo.
+> The three products run together as **Atalaya** ([DRTX2/atalaya](https://github.com/DRTX2/atalaya)): Nimbus detects a failing pipeline, calls `POST /automation/nimbus/flags/:key/envs/:env` here (HMAC-signed) to kill a flag, and restores it on recovery if no human changed it meanwhile. Bitácora subscribes to the `flag.*` events published here to build each incident's timeline. See that repo for the asserted end-to-end demo.
 
 Two **independent products** that solve different problems and can be used together:
 
@@ -27,7 +27,7 @@ sequenceDiagram
   H-->>X: signed webhooks with retries, DLQ, replay
 ```
 
-- Enabled by setting `HOOKRELAY_URL` + `HOOKRELAY_API_KEY` on Flagship. Unset means the integration is off.
+- Enabled by setting `HOOKRELAY_URL` + `HOOKRELAY_API_KEY` on Flagship, or `HOOKRELAY_API_KEY_FILE` (Docker/ECS secrets convention; re-read on every publish, so a rotated key needs no restart). Unset means the integration is off.
 - Events: `flag.created`, `flag.updated` (incl. `rolled back to #id`), `flag.archived`, with flag key, environment, version, action and actor.
 - **Flagship never depends on Hookrelay**: publishing happens after COMMIT, fire-and-forget with a 3 s timeout, counted in `flagship_hookrelay_notifications_total{result}`. SDK propagation doesn't touch it.
 - **Exactly-once effect** at the Hookrelay boundary: the idempotency key is derived from `(type, flag, env, version)`, so a retried publish never creates a second message.
