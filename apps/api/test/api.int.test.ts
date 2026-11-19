@@ -21,8 +21,20 @@ let sdkKey = '';
 // Fake Hookrelay: replica A publishes flag changes here (optional ecosystem integration).
 let hookrelay: Server;
 const hookrelayCalls: { auth?: string; idem?: string; body: { eventType: string; payload: Record<string, unknown> } }[] = [];
+let hookrelayDown = false; // simulate an outage: the fake answers 503 and records nothing
+let hookrelayRejected = 0;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Retries a request until it returns 2xx (the API may need a moment after a database outage). */
+async function eventuallyOk<T extends { status: number }>(fn: () => Promise<T>, attempts = 50): Promise<T> {
+  let last: T | undefined;
+  for (let i = 0; i < attempts; i++) {
+    last = await fn().catch(() => undefined);
+    if (last && last.status >= 200 && last.status < 300) return last;
+    await sleep(200);
+  }
+  throw new Error(`still failing after ${attempts} attempts: ${last?.status}`);
+}
 const admin = async (method: string, path: string, body?: unknown, base = A) => {
   const res = await fetch(base + path, {
     method,
@@ -57,6 +69,7 @@ beforeAll(async () => {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
+      if (hookrelayDown) { hookrelayRejected++; res.writeHead(503).end(); return; }
       hookrelayCalls.push({ auth: req.headers.authorization, idem: req.headers['idempotency-key'] as string, body: JSON.parse(body) });
       res.writeHead(202).end('{}');
     });
@@ -70,7 +83,7 @@ beforeAll(async () => {
     // The key is read from a file (Docker/ECS secrets convention); the auth assertions below prove it.
     const hookrelayKeyFile = join(tmpdir(), `flagship-hookrelay-key-${process.pid}`);
     writeFileSync(hookrelayKeyFile, 'hr_test\n');
-    const p = spawn(process.execPath, [dist], { env: { ...process.env, DATABASE_URL, ADMIN_TOKEN: ADMIN, PORT: new URL(base).port, LOG_FORMAT: 'json', ...(base === A ? { HOOKRELAY_URL: hookrelayUrl, HOOKRELAY_API_KEY_FILE: hookrelayKeyFile, NIMBUS_WEBHOOK_SECRET: NIMBUS_SECRET } : {}) }, stdio: ['ignore', 'ignore', 'inherit'] });
+    const p = spawn(process.execPath, [dist], { env: { ...process.env, DATABASE_URL, ADMIN_TOKEN: ADMIN, PORT: new URL(base).port, LOG_FORMAT: 'json', ...(base === A ? { HOOKRELAY_URL: hookrelayUrl, HOOKRELAY_API_KEY_FILE: hookrelayKeyFile, OUTBOX_INTERVAL_MS: '200', NIMBUS_WEBHOOK_SECRET: NIMBUS_SECRET } : {}) }, stdio: ['ignore', 'ignore', 'inherit'] });
     procs.push(p);
     for (let i = 0; i < 100; i++) {
       if (await fetch(`${base}/health`).then((r) => r.ok).catch(() => false)) break;
@@ -161,6 +174,64 @@ describe('Flagship (black box, two replicas)', () => {
     expect(created?.auth).toBe('Bearer hr_test');
     expect(updated?.idem).toBe('flagship:flag.updated:new-checkout:production:2');
     expect(updated?.body.payload).toMatchObject({ flagKey: 'new-checkout', env: 'production', version: 2, actor: 'integration-test' });
+  });
+
+  it('survives the database dropping every connection (failover): the process stays up and recovers', async () => {
+    const before = procs.map((p) => p.exitCode);
+    const admin = new pg.Client({ connectionString: DATABASE_URL });
+    await admin.connect();
+    await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()`);
+    await admin.end();
+    await sleep(500);
+    expect(procs.map((p) => p.exitCode)).toEqual(before); // nobody crashed
+    let status = 0;
+    for (let i = 0; i < 20 && status !== 200; i++) {
+      status = (await fetch(`${A}/api/flags`, { headers: { authorization: `Bearer ${ADMIN}` } }).catch(() => ({ status: 0 }))).status;
+      if (status !== 200) await sleep(200);
+    }
+    expect(status).toBe(200);
+  });
+
+  it('keeps pushing changes to SDKs after the database refused connections for a while (failover)', async () => {
+    const key = 'failover-push';
+    await admin('POST', '/api/flags', { key, name: 'Failover push', kind: 'boolean', variations: [false, true] });
+    const client = await FlagshipClient.init({ sdkKey, baseUrl: B, logger: quiet });
+    try {
+      // From the maintenance database: a database cannot refuse connections to itself.
+      const owner = new pg.Client({ connectionString: DATABASE_URL.replace(/\/[^/]+$/, '/postgres') });
+      await owner.connect();
+      const db = new URL(DATABASE_URL).pathname.slice(1);
+      // A failover: connections drop and new ones are refused for longer than one reconnect attempt.
+      await owner.query(`ALTER DATABASE ${db} ALLOW_CONNECTIONS false`);
+      await owner.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, [db]);
+      await sleep(3500);
+      await owner.query(`ALTER DATABASE ${db} ALLOW_CONNECTIONS true`);
+      await owner.end();
+
+      const f = await eventuallyOk(() => admin('GET', `/api/flags/${key}`));
+      await eventuallyOk(() => admin('PUT', `/api/flags/${key}/envs/production`, { enabled: true, offVariation: 0, fallthrough: { variation: 1 }, rules: [], version: f.body.envs.production.version }));
+      // Replica B's SDK only sees this if B re-established LISTEN after the outage.
+      for (let i = 0; i < 100 && client.variation(key, { key: 'u1' }, false) !== true; i++) await sleep(100);
+      expect(client.variation(key, { key: 'u1' }, false)).toBe(true);
+    } finally {
+      client.close();
+    }
+  });
+
+  it('never loses a flag event while Hookrelay is down: the outbox retries until it is delivered exactly once', async () => {
+    hookrelayDown = true;
+    await admin('POST', '/api/flags', { key: 'outbox-check', name: 'Outbox check', kind: 'boolean', variations: [false, true] });
+    for (let i = 0; i < 30 && hookrelayRejected === 0; i++) await sleep(100);
+    expect(hookrelayRejected).toBeGreaterThan(0); // it tried and failed…
+    const created = () => hookrelayCalls.filter((c) => c.idem === 'flagship:flag.created:outbox-check:all:0');
+    expect(created()).toHaveLength(0);
+
+    hookrelayDown = false; // …and once Hookrelay is back, the retry delivers it
+    for (let i = 0; i < 100 && created().length === 0; i++) await sleep(100);
+    expect(created()).toHaveLength(1);
+    await sleep(600); // a few more dispatcher passes: still exactly one delivery
+    expect(created()).toHaveLength(1);
+    expect(created()[0].body.payload).toMatchObject({ flagKey: 'outbox-check', action: 'created', actor: 'integration-test' });
   });
 
   it('lets a signed Nimbus incident kill a flag and restore it on recovery (Atalaya integration)', async () => {

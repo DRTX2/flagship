@@ -29,7 +29,7 @@ sequenceDiagram
 
 - Enabled by setting `HOOKRELAY_URL` + `HOOKRELAY_API_KEY` on Flagship, or `HOOKRELAY_API_KEY_FILE` (Docker/ECS secrets convention; re-read on every publish, so a rotated key needs no restart). Unset means the integration is off.
 - Events: `flag.created`, `flag.updated` (incl. `rolled back to #id`), `flag.archived`, with flag key, environment, version, action and actor.
-- **Flagship never depends on Hookrelay**: publishing happens after COMMIT, fire-and-forget with a 3 s timeout, counted in `flagship_hookrelay_notifications_total{result}`. SDK propagation doesn't touch it.
+- **Flagship never depends on Hookrelay, and never loses an event**: events go to a transactional outbox in the same transaction as the change and a dispatcher delivers them with retries ([ADR-0007](adr/0007-transactional-outbox.md)); attempts are counted in `flagship_hookrelay_notifications_total{result}`. SDK propagation doesn't touch it.
 - **Exactly-once effect** at the Hookrelay boundary: the idempotency key is derived from `(type, flag, env, version)`, so a retried publish never creates a second message.
 - Verified by Flagship's integration suite against a stand-in Hookrelay (auth header, idempotency key, payload). Decision record: [ADR-0006](adr/0006-optional-hookrelay-integration.md).
 

@@ -68,10 +68,8 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
       await c.query(`INSERT INTO audit_log (flag_key, actor, action, after) VALUES ($1,$2,'created',$3)`, [input.key, actor, input]);
       const envs = await c.query('SELECT key FROM environments');
       for (const e of envs.rows) await this.notify(c, e.key, input.key);
+      await this.hookrelay.enqueue(c, { type: 'flag.created', flagKey: input.key, action: 'created', actor });
       return { key: input.key };
-    }).then((r) => {
-      this.hookrelay.notify({ type: 'flag.created', flagKey: input.key, action: 'created', actor });
-      return r;
     });
   }
 
@@ -108,10 +106,11 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
         [flagKey, envKey, actor, action, before, next],
       );
       await this.notify(c, envKey, flagKey);
+      // Same transaction: the event exists if and only if the change commits (transactional outbox).
+      await this.hookrelay.enqueue(c, { type: 'flag.updated', flagKey, env: envKey, version: input.version + 1, action, actor });
       return { version: input.version + 1, action };
     }).then((r) => {
       metrics.configChanges.inc({ env: envKey, action: actionOverride ? 'rolled back' : r.action });
-      this.hookrelay.notify({ type: 'flag.updated', flagKey, env: envKey, version: r.version, action: r.action, actor });
       return { version: r.version };
     });
   }
@@ -139,8 +138,8 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
       await c.query(`INSERT INTO audit_log (flag_key, actor, action) VALUES ($1,$2,'archived')`, [flagKey, actor]);
       const envs = await c.query('SELECT key FROM environments');
       for (const e of envs.rows) await this.notify(c, e.key, flagKey);
+      await this.hookrelay.enqueue(c, { type: 'flag.archived', flagKey, action: 'archived', actor });
     });
-    this.hookrelay.notify({ type: 'flag.archived', flagKey, action: 'archived', actor });
   }
 
   changesFor(envKey: string) {
@@ -157,24 +156,51 @@ export class FlagsService implements OnModuleInit, OnModuleDestroy {
     await this.listen();
   }
 
-  private async listen(reconnect = false) {
+  /**
+   * Dedicated LISTEN connection. It is re-established with exponential backoff (1 s doubling, capped at
+   * 10 s: a kill switch must not stay stale long) for as long as it takes: a database failover takes longer than one retry, and while it is
+   * down no replica can fan changes out to SDKs (found by the Atalaya orders-flagship-db-down game day).
+   */
+  private async listen(reconnect = false, attempt = 0): Promise<void> {
     const client = new pg.Client({ connectionString: required('DATABASE_URL') });
+    let lost = false;
+    const onLost = (why: string) => {
+      if (lost || this.stopped) return;
+      lost = true;
+      metrics.listenConnected.set(0);
+      this.log.warn(`LISTEN connection lost: ${why}; reconnecting`);
+      client.end().catch(() => {});
+      this.scheduleListen(1);
+    };
     client.on('notification', (n) => {
       const { env, key } = JSON.parse(n.payload ?? '{}');
       this.config(key, env)
         .then((flag) => this.changes$.next({ env, key, flag }))
         .catch((e) => this.log.error(e));
     });
-    client.on('error', (e) => {
-      this.log.warn(`LISTEN connection lost: ${e.message}, reconnecting`);
+    client.on('error', (e) => onLost(e.message));
+    client.on('end', () => onLost('connection closed'));
+    try {
+      await client.connect();
+      await client.query('LISTEN flag_changes');
+    } catch (e) {
+      lost = true;
       client.end().catch(() => {});
-      if (!this.stopped) setTimeout(() => this.listen(true).catch((err) => this.log.error(err)), 1000);
-    });
-    await client.connect();
-    await client.query('LISTEN flag_changes');
+      if (!reconnect) throw e; // at boot, fail fast like every other dependency
+      this.log.warn(`LISTEN reconnect attempt ${attempt} failed: ${(e as Error).message}`);
+      this.scheduleListen(attempt + 1);
+      return;
+    }
     this.listener = client;
+    metrics.listenConnected.set(1);
     // Notifications sent while we were disconnected are gone: tell SDKs to re-download everything.
     if (reconnect) this.changes$.next({ resync: true });
+  }
+
+  private scheduleListen(attempt: number) {
+    if (this.stopped) return;
+    const delay = Math.min(10_000, 1000 * 2 ** Math.max(0, attempt - 1));
+    setTimeout(() => this.listen(true, attempt).catch((err) => this.log.error(err)), delay).unref();
   }
 
   async onModuleDestroy() {

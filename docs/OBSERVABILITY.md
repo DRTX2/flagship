@@ -31,7 +31,9 @@ histogram_quantile(0.95, sum by (le) (rate(flagship_http_request_duration_second
 ```
 
 ## Traces
-Same zero-code setup as Hookrelay: `NODE_OPTIONS=--require @opentelemetry/auto-instrumentations-node/register` with `OTEL_*` env vars (dependency installed; disabled by default).
+Same zero-code setup as Hookrelay: `NODE_OPTIONS=--import @opentelemetry/auto-instrumentations-node/register` (`--import`: the app is ESM) with `OTEL_*` env vars (dependency installed; disabled by default). An incoming `traceparent` is continued, and the transactional outbox stores the trace context with each row (`trace_context`, migration 003), so the delayed publish to Hookrelay joins the trace of the change that caused it (in Atalaya: the incident that killed the flag).
+
+The LISTEN connection that fans changes out to SDK streams is exported as `flagship_listen_connected` (1/0); alert when it is 0 for more than a minute: SDKs connected to that replica get no updates.
 
 ## Alerts
 CloudWatch (`infra/terraform/alarms.tf`): ALB 5xx, no healthy hosts, CPU, RDS CPU, RDS connections. Each links to a [RUNBOOK](RUNBOOK.md) section.

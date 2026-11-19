@@ -17,8 +17,17 @@ export const metrics = {
     labelNames: ['type'] as const, registers: [registry],
   }),
   hookrelayNotifications: new Counter({
-    name: 'flagship_hookrelay_notifications_total', help: 'Flag change events published to Hookrelay',
+    name: 'flagship_hookrelay_notifications_total', help: 'Delivery attempts of flag events to Hookrelay, by outcome (sent/retry/dead)',
     labelNames: ['result'] as const, registers: [registry],
+  }),
+  listenConnected: new Gauge({
+    name: 'flagship_listen_connected', help: '1 while this replica receives flag changes from PostgreSQL (LISTEN); 0 means SDKs connected here get no updates', registers: [registry],
+  }),
+  outboxPending: new Gauge({
+    name: 'flagship_outbox_pending', help: 'Flag events waiting to be delivered to Hookrelay', registers: [registry],
+  }),
+  outboxOldestSeconds: new Gauge({
+    name: 'flagship_outbox_oldest_seconds', help: 'Age of the oldest undelivered flag event (alert when it keeps growing)', registers: [registry],
   }),
   httpRequests: new Histogram({
     name: 'flagship_http_request_duration_seconds', help: 'API request latency',

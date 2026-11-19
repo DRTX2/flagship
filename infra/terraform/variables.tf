@@ -55,3 +55,15 @@ variable "alarm_email" {
   type    = string
   default = ""
 }
+
+variable "integration_secret_arn" {
+  type        = string
+  default     = ""
+  description = "Optional Atalaya integration: Secrets Manager secret (JSON) with NIMBUS_WEBHOOK_SECRET and HOOKRELAY_API_KEY. Empty = standalone."
+}
+
+variable "hookrelay_url" {
+  type        = string
+  default     = ""
+  description = "Optional Atalaya integration: Hookrelay base URL flag events are published to (outbox). Empty = off."
+}

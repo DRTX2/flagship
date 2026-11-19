@@ -8,7 +8,7 @@ Teams want flag changes to reach external systems (chat notifications, CI, audit
 ## Decision
 - After each committed change, publish `flag.created | flag.updated | flag.archived` to Hookrelay's ingestion API.
 - Off unless `HOOKRELAY_URL` and `HOOKRELAY_API_KEY` (or `HOOKRELAY_API_KEY_FILE`) are set.
-- Fire-and-forget, 3 s timeout, failures logged and counted, never thrown.
+- Fire-and-forget, 3 s timeout, failures logged and counted, never thrown. *Superseded by [ADR-0007](0007-transactional-outbox.md): a game day showed events were lost during short outages.*
 - Idempotency key `flagship:<type>:<flag>:<env>:<version>`, so retries and duplicates are harmless.
 
 ## Alternatives

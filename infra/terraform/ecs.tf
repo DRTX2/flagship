@@ -29,12 +29,15 @@ resource "aws_ecs_task_definition" "app" {
     image        = "${aws_ecr_repository.app["app"].repository_url}:${var.image_tag}"
     essential    = true
     portMappings = [{ containerPort = 4000 }]
-    environment = [
+    environment = concat([
       { name = "NODE_ENV", value = "production" },
       { name = "LOG_FORMAT", value = "json" },
       { name = "PORT", value = "4000" },
-    ]
-    secrets = [for k in ["DATABASE_URL", "ADMIN_TOKEN"] : { name = k, valueFrom = "${aws_secretsmanager_secret.app.arn}:${k}::" }]
+    ], var.hookrelay_url == "" ? [] : [{ name = "HOOKRELAY_URL", value = var.hookrelay_url }])
+    secrets = concat(
+      [for k in ["DATABASE_URL", "ADMIN_TOKEN"] : { name = k, valueFrom = "${aws_secretsmanager_secret.app.arn}:${k}::" }],
+      var.integration_secret_arn == "" ? [] : [for k in ["NIMBUS_WEBHOOK_SECRET", "HOOKRELAY_API_KEY"] : { name = k, valueFrom = "${var.integration_secret_arn}:${k}::" }],
+    )
     logConfiguration = {
       logDriver = "awslogs"
       options   = { awslogs-group = aws_cloudwatch_log_group.app.name, awslogs-region = var.region, awslogs-stream-prefix = "app" }
